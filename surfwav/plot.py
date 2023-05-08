@@ -83,7 +83,7 @@ def plot_spread(files, axs, model):
         border = 0.1*(maxx-minx)
         ax.set_xlim([minx-border,maxx+border])
         
-def disp_power(f, vel, fdbf, figure=None, normalise='max'):
+def disp_power(f, vel, fdbf, figure=None, plot_max=False, normalise='max'):
     """
     Plot a frequency-phase velocity transform when given the data.
 
@@ -130,8 +130,12 @@ def disp_power(f, vel, fdbf, figure=None, normalise='max'):
               extent=[f[0], f[-1], vel[0], vel[-1]],
               origin='lower',
               cmap='jet')
+    if plot_max:
+        # print(np.argmax(fdbf_plot, axis=1).shape, f.shape, vel.shape)
+        plt.scatter(f, vel[np.argmax(fdbf_plot, axis=0)], marker='x', color='black')
     ax.set_xlabel("Frequency [Hz]")
     ax.set_ylabel("Phase velocity [m/s]")
+    im.set_clim([0.,1.])
     fig.colorbar(im, ax=ax)
     
     return fig, ax
@@ -431,6 +435,7 @@ def plot_section_wiggle(gather,
                         lw=0.4,
                         fill_color=(0.5,0.5,0.5),
                         dist_method='offset',
+                        normalise='max-trace',
                         plot_source=True,
                         orient=None,
                         intsect=None,
@@ -534,7 +539,7 @@ def plot_section_wiggle(gather,
     times = gather.t
     
     # Normalise and extract data
-    raw_data = gather.normalise('max-trace').data
+    raw_data = gather.normalise(normalise).data
     
     # Determine how much room is available for each trace, scaled by input parameter
     # tr_scale
@@ -572,7 +577,7 @@ def plot_section_wiggle(gather,
                               plot_normalised_data,
                               where=plot_normalised_data>centre,
                               facecolor=fill_color)
-    
+        
     # Add the intersection point as red lines with text
     if intsect != None:
         # If the supplied distance is negative, subtract it from the end of the

@@ -130,7 +130,7 @@ def SU_header_fmt():
     fmt_id = ['i','h','f','q']
     fmt = ['int','short','float']
     
-    header = [
+    header_format = [
         ['int','tracl'],
         ['int','tracr'],
         ['int','fldr'],
@@ -215,10 +215,41 @@ def SU_header_fmt():
         ]
     
     # Replace the names with the correct identifiers for pack
-    for i in header[:-1]:
+    for i in header_format[:-1]:
         i[0] = fmt_id[fmt.index(i[0])]
         
-    return header
+    return header_format
+
+def COH_header_fmt():
+    """
+    Gives the format for the header of the coherence files. 
+
+    Returns
+    -------
+    header : list
+        List containing a list for every header entry in the SU .su format. 
+        In this smaller list, the first entry gives the data format of the entry
+        and the second the name of the variable. 
+
+    """
+    
+    fmt_id = ['i','h','f','q']
+    fmt = ['int','short','float']
+    
+    header_format = [
+        ['int','ntr'],
+        ['int','nf'],
+        ['float','df'],
+        ['int','idx0'],
+        ['int','idx1']
+        ]
+    
+    # Replace the names with the correct identifiers for pack
+    for i in header_format:
+        i[0] = fmt_id[fmt.index(i[0])]
+        
+    return header_format
+
 
 class Header:
     
@@ -227,6 +258,8 @@ class Header:
         # Get the format for the header from the definition function
         if fmt == "SU":
             self.format = SU_header_fmt()
+        elif fmt == "COH":
+            self.format = COH_header_fmt()
         else: # If no valid formats are provided throw an error
             raise ValueError(f"No valid format is provided, can be 'SU', but is '{fmt}'")
         
@@ -281,7 +314,7 @@ class Header:
     def get_tuple(self):
         """
         Builds up a tuple with every entry from the format in the right order.
-        Arrays are extraced so that every array entry is a separate entry. 
+        Arrays are extracted so that every array entry is a separate entry. 
         Meant for packing the data in the header into bytes
 
         Returns

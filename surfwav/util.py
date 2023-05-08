@@ -369,3 +369,32 @@ def point_to_line(coef, intercept, points):
                                (a*(-b*points[:,0] + a*points[:,1]) - b*c)/(a**2+b**2)])
     
     return points_on_line
+
+def rfftcorrelate(signal1, signal2, axis=-1):
+    
+    shape = 2*signal1.shape[axis]
+    
+    spectrum1 = np.fft.rfft(signal1, shape, axis=axis)
+    spectrum2 = np.fft.rfft(signal2, shape, axis=axis)
+    
+    return np.fft.fftshift(np.fft.irfft(spectrum1*np.conjugate(spectrum2), shape, axis=axis), axes=axis)
+
+def rfftconvolve(signal1, signal2, axis=-1):
+    
+    shape = 2*signal1.shape[axis]
+    
+    spectrum1 = np.fft.rfft(signal1, shape, axis=axis)
+    spectrum2 = np.fft.rfft(signal2, shape, axis=axis)
+    
+    return np.fft.fftshift(np.fft.irfft(spectrum1*spectrum2, shape, axis=axis), axes=axis)
+
+def rfftcoherence(signal1, signal2, stab_val = 1e-2, axis=-1):
+    
+    shape = 2*signal1.shape[axis]
+    
+    spectrum1 = np.fft.rfft(signal1, shape, axis=axis)
+    spectrum2 = np.fft.rfft(signal2, shape, axis=axis)
+    
+    coh = spectrum1*np.conjugate(spectrum2) / (abs(np.conjugate(spectrum1))*abs(spectrum2)+stab_val*np.max(abs(spectrum1)))
+    
+    return np.fft.fftshift(np.fft.irfft(coh, shape, axis=axis), axes=axis)

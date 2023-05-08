@@ -9,7 +9,7 @@ import numpy as np
 from scipy.signal import convolve2d
 from copy import deepcopy
 from surfwav.header import Header
-from surfwav.util import fit_line, freq_ft, fk_transform, point_to_line
+from surfwav.util import fit_line, freq_ft, fk_transform, point_to_line, rfftcorrelate, rfftcoherence, rfftconvolve
 from surfwav.SU_write import write_su, read_su
 from surfwav.FDBF import frequency_domain_beamforming
 from surfwav.plot import disp_power, plot_section_map, plot_section_wiggle, plot_ft, plot_fk
@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 
 class Gather:
     
-    def __init__(self, data=None, headers=None, filename=None, tol=1e-5):
+    def __init__(self, data=None, headers=None, filename=None, tol=1e-5, method_offset='line'):
         
         # If an empty gather is initialised, just set the data to zeroes and
         # the type to empty
@@ -33,32 +33,40 @@ class Gather:
             # If a filename is provided, set the data from this file
             if filename is not None:
                 data, headers = read_su(filename)
-
-            # If the data has a single dimension, set up a first axis, so the 
-            # shape is constant
-            if data.ndim <= 1:
-                data = data[np.newaxis,:]
-            # If only a single header is provided, put it in a list for 
-            # consistency
-            if isinstance(headers,Header):
-                headers = [headers]
-               
-            # Check if the amount of headers is the same as the amount of traces
-            if len(headers) != data.shape[0]:
-                raise IndexError(f"Amount of headers ({len(headers)}) and traces ({data.shape[0]}) is not equal")
             
-            # Now set some values for the gather
-            self.headers = headers
-            self.data = data
-            self.ns = data.shape[1]
-            self.shape = data.shape
-            self.ntr = data.shape[0]
-            self.dt = headers[0].dt/1e6
-            self.t = np.linspace(0,self.dt*self.ns, self.ns, endpoint=False)
-            self.tol = tol
-            self.upd_offsets('line')
-            self._update()
-            # self.type = self._check_type(tol=self.tol)
+            if data.shape[0] == 0 and len(headers) == 0:
+                self.data = np.zeros(1)
+                self.headers = [Header()]
+                
+                self.shape = [1]
+                self.type = 'empty'
+            else:
+            
+                # If the data has a single dimension, set up a first axis, so the 
+                # shape is constant
+                if data.ndim <= 1:
+                    data = data[np.newaxis,:]
+                # If only a single header is provided, put it in a list for 
+                # consistency
+                if isinstance(headers,Header):
+                    headers = [headers]
+                   
+                # Check if the amount of headers is the same as the amount of traces
+                if len(headers) != data.shape[0]:
+                    raise IndexError(f"Amount of headers ({len(headers)}) and traces ({data.shape[0]}) is not equal")
+                
+                # Now set some values for the gather
+                self.headers = headers
+                self.data = data
+                self.ns = data.shape[1]
+                self.shape = data.shape
+                self.ntr = data.shape[0]
+                self.dt = headers[0].dt/1e6
+                self.t = np.linspace(0,self.dt*self.ns, self.ns, endpoint=False)
+                self.tol = tol
+                self.upd_offsets(method_offset)
+                self._update()
+                # self.type = self._check_type(tol=self.tol)
         else:
             raise ValueError("No valid combination of inputs was provided")
         
@@ -74,7 +82,10 @@ class Gather:
     def __len__(self):
         # As the amount of traces should be the same as the amount of headers
         # when loading the data, the amount of traces is simply used
-        return len(self.headers)
+        if self.type == 'empty':
+            return 0
+        else:
+            return len(self.headers)
     
     def __getitem__(self, idx):
         
@@ -234,10 +245,10 @@ class Gather:
             Descriptor of the gather.
 
         """
-        offsets = np.array(self.get_item('offset'))
+        offsets = self.get_item('offset')
         midpoints = (self.src_pos()+self.rec_pos())/2
         
-        if len(self) == 1:
+        if self.data.shape[0] == 1:
             typ = 'single'
         elif np.all(check_tol(offsets, tol)):
             typ = 'offset'
@@ -252,9 +263,20 @@ class Gather:
             
         self.type = typ
         
+    def _set_rec_to_src(self, idx):
+        
+        new_sx = self.get_item('gx')[idx]
+        new_sy = self.get_item('gy')[idx]
+        new_selev = self.get_item('gelev')[idx]
+        
+        self.set_item('sx', new_sx)
+        self.set_item('sy', new_sy)
+        self.set_item('selev', new_selev)
+        
     def _update(self):
         self._check_type(self.tol)
         self.set_item('ntr',len(self))
+        self.set_item('ns', self.ns)
         
         return self
     
@@ -264,8 +286,8 @@ class Gather:
     
     def reverse(self):
         new_gather = self[::-1]
-        offsets = np.array(new_gather.get_item("offset"))
-        new_gather.set_item('offset', abs(offsets))
+        offsets = new_gather.get_item("offset")
+        new_gather.set_item('offset', -offsets)
         
         return new_gather
     
@@ -299,7 +321,7 @@ class Gather:
     
     def get_item(self, attr_name):
         """
-        Get a list with the value of a certain attribute from each header in 
+        Get an array with the value of a certain attribute from each header in 
         the gather
 
         Parameters
@@ -310,8 +332,8 @@ class Gather:
 
         Returns
         -------
-        attr_list : list
-            List with the values extracted from the headers.
+        attr_list : np.ndarray
+            Array with the values extracted from the headers.
 
         """
         attr_list = []
@@ -319,7 +341,7 @@ class Gather:
         for header in self.headers:
             attr_list.append(getattr(header,attr_name))
             
-        return attr_list
+        return np.array(attr_list)
     
     def set_item(self, attr_name, values):
         """
@@ -516,9 +538,12 @@ class Gather:
         mask = np.logical_and(attr >= start,
                               attr <= end)
         
+        if not np.any(mask):
+            return Gather()
+        
         return self[mask]
     
-    def trim(self, start=0., end=None):
+    def trim(self, end=None, start=0.,):
         """
         Trim this gather to a specified time range. End will default to 
         self.t[-1].
@@ -543,7 +568,7 @@ class Gather:
         mask = np.logical_and(self.t >= start,
                               self.t <= end,
                               dtype=bool)
-        
+                
         # Cut the data
         new_data = self.data[:,mask]
         # Create a new gather
@@ -552,6 +577,30 @@ class Gather:
         new_gather = new_gather.set_item('ns', np.sum(mask))
         
         return new_gather
+    
+    def offset(self, sel_offset):
+        """
+        Select only traces that fall within a certain range of offset:
+
+        Parameters
+        ----------
+        sel_offset : float or list
+            The offset range selected. If indexable, uses first two indices for
+            as left and right offset respectively. Otherwise applies value on
+            both sides.
+
+        Returns
+        -------
+        Gather
+            A gather with the specified offset range
+
+        """
+        try: 
+            sel_offset[0], sel_offset[1]
+        except (IndexError, TypeError):
+            return self.select("offset", start=-sel_offset, end=sel_offset)
+        else:
+            return self.select("offset", start=sel_offset[0], end=sel_offset[1])
     
     def filter(self, method, f_range):
         """
@@ -665,8 +714,16 @@ class Gather:
             data_max = np.where(data_max == 0, 1, data_max)
             
             new_data = self.data / data_max[:,np.newaxis]
+        elif method == 'cyl-spread':
+            offsets = np.array(self.get_item('offset'))
+            
+            rms_gather = self.normalise('rms-trace')
+            new_data = rms_gather.data/(offsets[:,np.newaxis]**2)
+            
+        elif method == 'none':
+            return self
         else:
-            raise ValueError(f"Invalid method ({method}) provided, can be ['rms-trace', 'max-trace']")
+            raise ValueError(f"Invalid method ({method}) provided, can be ['rms-trace', 'max-trace', 'none']")
         
         new_gather = Gather(new_data, deepcopy(self.headers))
         
@@ -713,6 +770,9 @@ class Gather:
         
         # If no velocity is set, act as if an infinite velocity was used (or just
         # a vertical line)
+        if not isinstance(method, str):
+            mute_mult(method, 0., 200, 0.1, self)
+        
         if vel is None:
             mult = np.where(self.t >= start, 1., 0.)[np.newaxis,:]
         else:
@@ -775,22 +835,25 @@ class Gather:
         
         # Convolve the data with the operator and divide by the amount of points
         # used to get the mean
-        convolve = convolve2d(abs(self.data),operator[np.newaxis,:],'full')/scal_vals[np.newaxis,:]
+        convol = convolve2d(abs(self.data),operator[np.newaxis,:],'full')/scal_vals[np.newaxis,:]
         
-        convolve = np.where(convolve==0,1,convolve)
+        convol = np.where(convol==0,1,convol)
         
         # Now snip out the relevant part for each method
         if basis == 'trailing':
-            snipped = 1/convolve[:,oper_len_items-1:]
+            snipped = 1/convol[:,oper_len_items-1:]
         elif basis == 'leading':
-            snipped = 1/convolve[:,:-oper_len_items+1]
+            snipped = 1/convol[:,:-oper_len_items+1]
         elif basis == 'centred':
-            snipped = 1/convolve[:,int(oper_len_items/2):int(-oper_len_items/2)]
+            snipped = 1/convol[:,int(oper_len_items/2):int(-oper_len_items/2)]
         
         # Multiply the data with the scaling values
         new_data = self.data*snipped
             
         return Gather(new_data, deepcopy(self.headers))
+    
+    def remove_und_coords(self):
+        return self[np.all(self.rec_pos() != 0, axis=-1)]
     
     def stack_src_rec_pairs(self, sort=True, end_line=0):
         """
@@ -895,20 +958,32 @@ class Gather:
                 recs_line = point_to_line(coef, intercept, self.rec_pos()[:,:-1])
                 srcs_line = point_to_line(coef, intercept, self.src_pos()[:,:-1])
             
+            pos_to_source = recs_line - srcs_line
+            angles = np.arctan2(pos_to_source[1,:], pos_to_source[0,:])
+            angle = angles[0]
+            if angle != 0.:
+                opposite = angle - angle/abs(angle) * np.pi
+            else:
+                opposite = np.pi
+            neg_angle = min(angle, opposite)
+            
             # Get the distance to the first receiver in the gather
-            dists = np.linalg.norm(recs_line - recs_line[:,0][:,np.newaxis], axis=0)
-            dists_src = np.linalg.norm(srcs_line - recs_line[:,0][:,np.newaxis], axis=0)
+            # dists = np.linalg.norm(recs_line - recs_line[:,0][:,np.newaxis], axis=0)
+            # dists_src = np.linalg.norm(srcs_line - recs_line[:,0][:,np.newaxis], axis=0)
             
             # Now calculate the absolute offset
             new_offset = np.linalg.norm(recs_line - srcs_line, axis=0)
 
             # For stations that are less far along the line than the source,
             # set a negative offset
-            new_offset = np.where(dists < dists_src, -new_offset, new_offset)
+            new_offset = np.where(angles - neg_angle <= 1e-4, -new_offset, new_offset)
+            # new_offset = np.where(dists < dists_src, -new_offset, new_offset)
         else:
             raise ValueError(f"Invalid method ({method}) provided, can be ['simple', 'line']")
         
         self.set_item('offset', new_offset)
+
+        return self
         
     def add_noise(self, ampl, std, centre=0.):
         """
@@ -1028,6 +1103,27 @@ class Gather:
 
         """
         return np.unique(self.rec_pos(), axis=0)
+    
+    def estimate_src(self):
+        
+        maxima = np.max(abs(self.data), axis=1)
+        
+        idx_max = np.argmax(maxima)
+        if idx_max == 0 or idx_max == len(self) - 1:
+            return self
+        idx_side = idx_max - 1 if maxima[idx_max-1] >= maxima[idx_max+1] else idx_max+1
+        dist_src = np.average(self.rec_pos()[[idx_max,idx_side],:], axis=0) 
+        dist_src = dist_src.squeeze()[np.newaxis,:] + np.zeros([len(self),1])
+        
+        new_gx = su_mult(dist_src[:,0], self.get_item('scalco'))
+        new_gy = su_mult(dist_src[:,1], self.get_item('scalco'))
+        new_gz = su_mult(dist_src[:,2], self.get_item('scalel'))
+        
+        self.set_item('sx', new_gx)
+        self.set_item('sy', new_gy)
+        self.set_item('selev', new_gz)
+        
+        return self
     
     def fit_line(self, fit_to):
         """
@@ -1152,6 +1248,89 @@ class Gather:
         
         return np.linalg.norm(self.rec_pos()[self.find_outer_rec()[end_line],:] - self.unq_src_pos())
     
+    def sweep(self, step, start=0, stop=None,  length=None):
+        
+        offsets = self.get_item('offset')
+        if stop is None:
+            stop = abs(offsets).max()
+        # start_locs = np.arange(start, stop, step)
+        start_loc = start
+                
+        while start_loc <= stop:
+            if length is None:
+                length = offsets.max()*2
+            mask = np.logical_and(abs(offsets) >= start_loc,
+                                  abs(offsets) <= start_loc+length)
+            
+            start_loc += step
+            
+            yield self[mask]
+            
+    ############################ MULTIPLICATIONS #############################
+    
+    def correlate(self, signal2, return_causal=True):
+        
+        new_data = rfftcorrelate(self.data, signal2)
+        
+        if return_causal is None:
+            pass
+        elif return_causal:
+            new_data = new_data[:,self.ns-1:]
+        elif not return_causal:
+            new_data = new_data[:,:self.ns-1]
+        
+        return Gather(new_data, deepcopy(self.headers))
+    
+    def coherence(self, signal2, return_causal=True):
+        
+        new_data = rfftcoherence(self.data, signal2)
+        
+        if return_causal is None:
+            pass
+        elif return_causal:
+            new_data = new_data[:,self.ns-1:]
+        elif not return_causal:
+            new_data = new_data[:,:self.ns-1]
+        
+        return Gather(new_data, deepcopy(self.headers))
+    
+    def convolve(self, signal2, return_causal=True):
+        
+        new_data = rfftconvolve(self.data, signal2)
+        
+        if return_causal is None:
+            pass
+        elif return_causal:
+            new_data = new_data[:,self.ns-1:]
+        elif not return_causal:
+            new_data = new_data[:,:self.ns-1]
+        
+        return Gather(new_data, deepcopy(self.headers))
+    
+    def corr_in(self, idx, return_causal=True):
+        
+        new_gather = self.correlate(self.data[idx,:][np.newaxis,:], return_causal=return_causal)
+        
+        new_gather._set_rec_to_src(idx)
+        
+        return new_gather
+    
+    def coh_in(self, idx, return_causal=True):
+        
+        new_gather = self.coherence(self.data[idx,:][np.newaxis,:], return_causal=return_causal)
+        
+        new_gather._set_rec_to_src(idx)
+        
+        return new_gather
+    
+    def conv_in(self, idx, return_causal=True):
+        
+        new_gather = self.convolve(self.data[idx,:][np.newaxis,:], return_causal=return_causal)
+        
+        new_gather._set_rec_to_src(idx)
+        
+        return new_gather
+    
     ############################ TRANSFORMS ##################################
     
     
@@ -1249,6 +1428,56 @@ class Gather:
             return plot_section_map(self, **kwargs)
         else:
             raise ValueError(f"Invalid method ({method}) provided, can be ['wiggle', 'map']")
+            
+    def plot_mute(self, start, vel, length=0.1):
+        """
+        Plot the muting lines over a wiggle plot of the gather. 
+
+        Parameters
+        ----------
+        start : float
+            The start time of the mute function at zero offset
+        vel : float
+            The slope of the muting cone.
+        length : float, optional
+            The ramp length of the muting function. The default is 0.1.
+
+        Returns
+        -------
+        None.
+
+        """
+        lw_main = 1.2
+        lw_side = 1.
+        
+        # Initialise a figure
+        fig, ax = plt.subplots(dpi=300)
+        # Plot the wiggle plot
+        self.plot('wiggle', figure=(fig,ax))
+        
+        xlims = ax.get_xlim()
+        ylims = ax.get_ylim()
+        
+        # Plot the main centre mute line
+        ax.plot([xlims[0], 0], [abs(xlims[0])/vel, start], c='r', lw=lw_main, alpha=0.6)
+        ax.plot([0,xlims[1]], [start, abs(xlims[1]/vel)], c='r', lw=lw_main, alpha=0.6)
+        
+        # Plot the side lines
+        for i in [-1, 1]:
+            ax.plot([xlims[0], 0], 
+                    [abs(xlims[0])/vel+0.5*i*length, start+0.5*i*length], 
+                    c='orange', 
+                    lw=lw_side, 
+                    alpha=0.6)
+            ax.plot([0, xlims[1]], 
+                    [start+0.5*i*length, abs(xlims[1])/vel+0.5*i*length], 
+                    c='orange', 
+                    lw=lw_side, 
+                    alpha=0.6)
+        
+        # Enforce the limits
+        ax.set_xlim(xlims)
+        ax.set_ylim(ylims)
         
     def plot_src_gathers(self):
         """
@@ -1295,6 +1524,19 @@ class Gather:
             if col_idx >= len(colors):
                 col_idx = 0
         
+        # Change the plot to have the same scale on the x and y axes
+        xlims = ax.get_xlim()
+        ylims = ax.get_ylim()
+        
+        spread = max(ylims[1]-ylims[0], xlims[1]-xlims[0])
+        centre = [np.mean(xlims), np.mean(ylims)]
+        
+        xlims = [centre[0]-0.5*spread, centre[0]+0.5*spread]
+        ylims = [centre[1]-0.5*spread, centre[1]+0.5*spread]
+        
+        ax.set_xlim(xlims)
+        ax.set_ylim(ylims)
+        
         return fig, ax
     
     def plot_ft(self, figure=None):
@@ -1320,7 +1562,7 @@ class Gather:
         f, spec = self.ft()
         return plot_ft(f, self.dists(), spec, figure=figure)
     
-    def plot_avg_fourier(self, figure=None):
+    def plot_avg_fourier(self, figure=None, fmax=None):
         """
         Plot the average frequency spectrum of the data. The individual traces
         are plotted with transparency in black, while the average is plotted in
@@ -1346,11 +1588,14 @@ class Gather:
             fig, ax = plt.subplots(dpi=300)
         else:
             fig, ax = figure
-            
+        
+        if fmax is None:
+            fmax = f[-1]
+        
         for line in spec:
             ax.plot(f, abs(line), c='black', alpha=0.3)
         ax.plot(f, np.average(abs(spec), axis=0), c='r')
-        ax.set_xlim([f[0],f[-1]])
+        ax.set_xlim([f[0],fmax])
         ylim = ax.get_ylim()
         ax.set_ylim([0,ylim[1]])
         ax.set_xlabel("Frequency [Hz]")
@@ -1362,9 +1607,9 @@ class Gather:
         f, k, fk = self.fk()
         return plot_fk(f, k, fk, figure=figure)
     
-    def plot_FDBF(self, vel, figure=None, **kwargs):
+    def plot_FDBF(self, vel, figure=None, plot_max=False, **kwargs):
         f, fdbf = self.FDBF(vel, **kwargs)
-        return disp_power(f, vel, fdbf, figure=figure)
+        return disp_power(f, vel, fdbf, figure=figure, plot_max=plot_max)
         
 def check_tol(array, tol, point = None):
     """
@@ -1427,6 +1672,36 @@ def su_div(value, factor):
         else:
             return value*factor
         
+def su_mult(value, factor):
+    
+    # For arrays/lists 
+    if isinstance(value, np.ndarray) or isinstance(value, list):
+        # Enforce arrays
+        value = np.array(value)
+        factor = np.array(factor)
+        
+        # Check if the arrays have the same length
+        if len(value) != len(factor):
+            raise IndexError("Length of value array ({len(value)}) is not the same as factor array ({len(factor)})")
+        
+        # Get the index mask
+        mask = factor < 0
+        
+        # Where the mask is True, multiply values by the factor
+        value[mask] = value[mask] * np.abs(factor[mask])
+        # Elsewhere divide with the factor
+        value[~mask] = value[~mask] / factor[~mask]
+        
+        # Return the array
+        return value
+        
+    else:
+        if factor < 0:
+            return value*abs(factor)
+        else:
+            return value/factor
+    
+        
 def mute_mult(method, start, vel, length, gather):
     """
     Create a muting multiplier for a given gather. The result is an array with
@@ -1476,7 +1751,7 @@ def mute_mult(method, start, vel, length, gather):
     locations = abs(offset)/vel + start
     # Now get the index belonging to this location
     loc_idx = np.round(locations/gather.dt).astype(int)
-    
+        
     # Initialise the multiplication array
     mult = np.where(locations <= t, 1., 0.)
     if method == 'step':
@@ -1508,3 +1783,5 @@ def mute_mult(method, start, vel, length, gather):
         # to be similar to the ramp function. If you want to make it steeper 
         # change the value before length to be lower and vice versa.
         return 1/(1+np.exp(-(t - locations)/(0.23*length)))
+    else:
+        raise ValueError(f"Invalid method ({method}) provided, can be ['step', 'ramp', 'sigmoid']")
