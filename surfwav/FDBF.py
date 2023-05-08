@@ -325,7 +325,7 @@ def frequency_domain_beamforming(gather,
     # Make sure the traces are in the right order
     gather = gather.sort_offset()
     
-    offsets = np.array(gather.get_item('offset'))
+    offsets = gather.get_item('offset')
 
     if not (np.all(offsets <= 0) or np.all(offsets >= 0)):
         print("WARNING: Gather contains both negative and positive offsets, is unlikely to give good results")    
@@ -353,7 +353,7 @@ def frequency_domain_beamforming(gather,
         k = 2*np.pi*f[np.newaxis,:]/vel[:,np.newaxis]
         # Get all offsets
         offsets = np.array(gather.get_item('offset'))
-        
+                
         # Determine the weighting for the sscm
         if weighting == 'sqrt':
             sscm *= offsets[:,np.newaxis].dot(offsets[np.newaxis,:])

@@ -255,10 +255,10 @@ class SeisModel:
 
         """
         
-        x_origin = header.f1
-        model_dx = header.d1
-        z_origin = header.f2
-        model_dz = header.d2
+        x_origin = header.f2
+        model_dx = header.d2
+        z_origin = header.f1
+        model_dz = header.d1
         
         if self.shape == None:
             return None
@@ -422,11 +422,11 @@ class SeisModel:
             # Get the shape of the data
             data_shape = model_gather.data.shape
             # And some information about the axes
-            x_origin = header.f1
-            model_dx = header.d1
-            z_origin = header.f2
-            model_dz = header.d2
-            
+            x_origin = header.f2
+            model_dx = header.d2
+            z_origin = header.f1
+            model_dz = header.d1
+                        
             # If no shape is defined yet, take it from the file
             if self.shape is None:
                 self.shape = model_gather.data.squeeze().shape
@@ -558,6 +558,66 @@ class SeisModel:
         else:
             raise ValueError(f"{method} is not a valid method, can be 'multiply'")
     
+    def vp_to_vs(self, method, *args):
+        """
+        Convert a vp model to a vs model. Currently only multiply is implemented.
+
+        Parameters
+        ----------
+        method : str
+            The conversion method. Can be:
+                - multiply
+                If a single argument is provided, all data is multiplied with
+                this one. If there are two, it is assumed that the first
+                argument contains multipliers for each layer, while the second
+                one contains the top of each layer. 
+        *args : tuple
+            The arguments for the method.
+
+        Raises
+        ------
+        ValueError
+            If the value of method is not a valid one.
+
+        Returns
+        -------
+        None.
+
+        """
+        
+        if method == 'multiply':
+            try:
+                len(args[1])
+            except TypeError:
+                layers = [args[1]]
+            else:
+                layers = args[1]
+            
+            # If there are two arguments
+            if len(args) == 2:
+                layer_tops = np.zeros(len(layers)+1)
+                layer_tops[:-1] = layers
+                layer_tops[-1] = self.shape[-1]
+            else:
+                layer_tops = [0,self.shape[-1]]
+            
+            # Extract the multipliers from args, if there is a single one, put
+            # it into a list
+            multipliers = args[0]
+            try:
+                iter(multipliers)
+            except TypeError:
+                multipliers = [multipliers]
+            
+            # Apply the layered multiplication
+            idcs = get_idx(layer_tops, min(self.z), self.dz)
+            for i, mult in enumerate(multipliers):
+                self.vs[:,idcs[i]:idcs[i+1]] = self.vp[:,idcs[i]:idcs[i+1]] * mult
+                
+            self._got_vs = True
+        else:
+            raise ValueError(f"{method} is not a valid method, can be 'multiply'")
+    
     def vp_to_rho(self, method):
         """
         Convert vp to rho. Currently only Gardner's relation is implemented. 
@@ -624,9 +684,11 @@ class SeisModel:
         elif self.ndim == 2:
             im = ax.imshow(model.T,
                       aspect = 'auto',
-                      extent = [min(self.x), max(self.x), max(self.z), min(self.z)])
+                      extent = [self.x[0], self.x[-1], self.z[-1], self.z[0]])
             ax.set_xlabel("Surface distance [m]")
             ax.set_ylabel("Depth [m]")
+            ax.xaxis.set_label_position('top') 
+            ax.tick_params(top=True, labeltop=True, bottom=False, labelbottom=False)
             fig.colorbar(im, ax=ax,
                                 label=self._get_label(which_model))
             
@@ -772,6 +834,6 @@ class SeisModel:
         # Write the source wavelet
         filename = folder_output + f"//source_wavelet{affix}.su"
         fnames.append(filename)
-        make_su(filename, self.source_ampl, self.dt, 0)
+        make_su(filename, self.source_ampl, self.dt, 0, method_offset='simple')
         
         return fnames

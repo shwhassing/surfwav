@@ -4,7 +4,8 @@ from surfwav.header import Header
 from surfwav.util import conv_endian
 
 su_data_fmt = "f" # Data format for SU traces, is float (4 bytes)
-su_header_length = 240 # Length of SU header in bytes
+# su_header_length = 240 # Length of SU header in bytes
+COH_data_fmt = "f"
 
 def read_header(byte_header, endian = "little"):
     """
@@ -98,7 +99,7 @@ def bin_to_header(file, endian="little"):
 
     """
     # Read the following bytes from the file for the header
-    byte_header = file.read(su_header_length)
+    byte_header = file.read(calcsize(Header("SU").binary_fmt()))
     # Convert these bytes to a header object
     header = read_header(byte_header, endian=endian)
     
@@ -269,3 +270,35 @@ def write_su(filename, gather, endian = 'little'):
             bin_data_fmt = endian + str(gather.ns) + su_data_fmt
             # And write the trace to the file
             file.write(pack(bin_data_fmt,*data))
+            
+def write_COH(filename, data, stack_count, df, endian="little"):
+    endian = conv_endian(endian)
+    
+    # Get the size of the dataset
+    ntr = data.shape[0]
+    nf = data.shape[-1]
+    
+    # Open the new file
+    with open(filename, 'wb') as file:
+        # Go over each receiver pair
+        for i in range(data.shape[0]):
+            for j in range(data.shape[1]):
+                # If
+                if stack_count[i,j] != 0:
+                    header = Header("COH")
+                    header.ntr = ntr
+                    header.nf = nf
+                    header.df = df
+                    
+                    header.idx0 = i
+                    header.idx1 = j
+                    
+                    bin_header_fmt = header.binary_fmt()
+                
+                    values = header.force_types().fit_binary().get_tuple()
+                    
+                    file.write(pack(bin_header_fmt, *values))
+                    
+                    bin_data_fmt = endian + str(nf) + COH_data_fmt
+                    
+                    file.write(pack(bin_data_fmt, *data[i,j,:]))

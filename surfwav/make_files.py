@@ -53,7 +53,7 @@ def make_su_header(data,dt,x):
     
     return trace_headers
 
-def make_su(filename, data, dt, x, endian = 'little'):
+def make_su(filename, data, dt, x, endian = 'little', method_offset='line'):
     """
     Function that makes a Seismic Unix .su file when given raw data. 
 
@@ -94,7 +94,7 @@ def make_su(filename, data, dt, x, endian = 'little'):
     # Make the headers for the SU file
     headers = make_su_header(data, dt, x)
     
-    gather = Gather(data, headers)
+    gather = Gather(data, headers, method_offset=method_offset)
     
     # Write the data to the file
     write_su(filename, gather, endian)
@@ -142,13 +142,13 @@ def make_su_model(filename, data, dx, dz, origin=(0,0), endian = 'little'):
         header.counit    = 1
         header.f1 = origin[1]
         header.f2 = origin[0]
-        header.d1 = dx
-        header.d2 = dz
+        header.d1 = dz
+        header.d2 = dx
         
         # Add the header to the list
         headers.append(header)
     
-    gather = Gather(data, headers)
+    gather = Gather(data, headers, method_offset='simple')
     
     # Write the data to the file
     write_su(filename, gather, endian)
