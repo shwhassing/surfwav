@@ -201,7 +201,7 @@ class Gather:
             return self
     
     def __eq__(self, other):
-        if not isinstance(other, Gather):
+        if not type(other) == type(self):
             raise ValueError(f"Cannot compare Gather object with other object of type {type(other)}")
             
         # Check the base values of the gather against the other
@@ -826,6 +826,10 @@ class Gather:
         """   
         # The operator length in amount of data points
         oper_len_items = int(np.round(oper_len/self.dt+1))
+        
+        # Operator length must be uneven, so add 1 if it isn't
+        if oper_len_items % 2 == 0:
+            oper_len_items += 1
         
         # The convolution operator for the mean
         operator = np.ones(oper_len_items)
